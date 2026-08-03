@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>库房出入库数据分析与规划工具</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+<style>
+:root {
+  --primary: #2E86AB;
+  --primary-light: #4FA3C7;
+  --secondary: #A23B72;
+  --success: #27AE60;
+  --warning: #F39C12;
+  --danger: #E74C3C;
+  --bg: #f0f2f6;
+  --card-bg: #ffffff;
+  --text: #262730;
+  --text-muted: #666;
+  --border: #e0e0e0;
+  --radius: 8px;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: -apple-system, "Microsoft YaHei", "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+}
+.header {
+  background: linear-gradient(135deg, #2E86AB 0%, #1a5d7a 100%);
+  color: white;
+  padding: 20px 30px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+.header h1 { font-size: 24px; }
+.header p { opacity: 0.9; font-size: 14px; margin-top: 4px; }
+.container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+.upload-section {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.upload-card {
+  background: var(--card-bg);
+  border-radius: var(--radius);
+  padding: 24px;
+  text-align: center;
+  border: 2px dashed var(--border);
+  transition: all 0.3s;
+  cursor: pointer;
+}
+.upload-card:hover { border-color: var(--primary); background: #f8fbff; }
+.upload-card.has-file { border-color: var(--success); border-style: solid; background: #f0fff4; }
+.upload-card.dragover { border-color: var(--primary); background: #e8f4fd; }
+.upload-card .icon { font-size: 36px; margin-bottom: 8px; }
+.upload-card .label { font-size: 15px; font-weight: 600; }
+.upload-card .hint { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+.upload-card .filename { font-size: 13px; color: var(--success); margin-top: 6px; font-weight: 600; }
+.layout { display: flex; gap: 20px; }
+.sidebar {
+  width: 280px;
+  flex-shrink: 0;
+  background: var(--card-bg);
+  border-radius: var(--radius);
+  padding: 16px;
+  height: fit-content;
+  position: sticky;
+  top: 20px;
+}
+.sidebar h3 { font-size: 14px; margin-bottom: 12px; color: var(--primary); border-bottom: 2px solid var(--primary); padding-bottom: 6px; }
+.sidebar .ctrl-group { margin-bottom: 16px; }
+.sidebar label { font-size: 12px; font-weight: 600; display: block; margin-bottom: 4px; }
+.sidebar select, .sidebar input[type="date"], .sidebar input[type="text"] {
+  width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 13px;
+}
+.sidebar select:focus, .sidebar input:focus { outline: none; border-color: var(--primary); }
+.sidebar .multiselect {
+  border: 1px solid var(--border); border-radius: 4px; max-height: 120px; overflow-y: auto; padding: 4px;
+}
+.sidebar .multiselect label { font-weight: normal; padding: 2px 0; cursor: pointer; }
+.sidebar .multiselect input[type="checkbox"] { margin-right: 4px; }
+.main-content { flex: 1; min-width: 0; }
+.no-data {
+  text-align: center; padding: 60px 20px; background: var(--card-bg); border-radius: var(--radius);
+}
+.no-data .icon { font-size: 48px; margin-bottom: 12px; }
+.no-data h2 { color: var(--text-muted); }
+.no-data p { color: var(--text-muted); margin-top: 8px; }
+.section {
+  background: var(--card-bg); border-radius: var(--radius); padding: 20px;
+  margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+.section h2 { font-size: 18px; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 2px solid var(--primary); }
+.metrics { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.metric-card {
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  border-radius: var(--radius);
+  padding: 16px;
+  text-align: center;
+  border-left: 4px solid var(--primary);
+}
+.metric-card.out { border-left-color: var(--secondary); }
+.metric-card.success { border-left-color: var(--success); }
+.metric-card.warning { border-left-color: var(--warning); }
+.metric-card .value { font-size: 24px; font-weight: 700; color: var(--text); }
+.metric-card .label { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+.chart-container { margin-top: 12px; }
+.btn {
+  display: inline-block; padding: 8px 20px; background: var(--primary); color: white;
+  border: none; border-radius: var(--radius); cursor: pointer; font-size: 14px; transition: all 0.2s;
+}
+.btn:hover { background: #1a5d7a; }
+.btn.btn-danger { background: var(--danger); }
+.btn.btn-danger:hover { background: #c0392b; }
+.btn.btn-sm { padding: 4px 12px; font-size: 12px; }
+.info-box {
+  background: #e8f4fd; border-left: 4px solid var(--primary); padding: 12px 16px;
+  border-radius: 4px; margin-bottom: 12px; font-size: 14px;
+}
+.info-box.success { background: #e8f8e8; border-left-color: var(--success); }
+.info-box.warning { background: #fff8e1; border-left-color: var(--warning); }
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }
+.data-table th { background: var(--primary); color: white; padding: 8px; text-align: left; position: sticky; top: 0; }
+.data-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.data-table tr:nth-child(even) { background: #f8f9fa; }
+.data-table tr:hover { background: #e8f4fd; }
+.tab-bar { display: flex; gap: 4px; margin-bottom: 16px; flex-wrap: wrap; }
+.tab-btn {
+  padding: 8px 20px; background: var(--card-bg); border: 1px solid var(--border);
+  border-radius: var(--radius) var(--radius) 0 0; cursor: pointer; font-size: 14px;
+  transition: all 0.2s;
+}
+.tab-btn.active { background: var(--primary); color: white; border-color: var(--primary); }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+.expander { margin-top: 12px; }
+.expander summary { cursor: pointer; font-weight: 600; color: var(--primary); padding: 8px; }
+.hidden { display: none !important; }
+@media (max-width: 768px) {
+  .layout { flex-direction: column; }
+  .sidebar { width: 100%; position: static; }
+  .upload-section { grid-template-columns: 1fr; }
+  .metrics { grid-template-columns: 1fr 1fr; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>📦 库房出入库数据分析与规划工具</h1>
+  <p>上传出入库 Excel 数据，自动分析频次、极值、在库时间，输出库容与人员配置建议</p>
+</div>
+
+<div class="container">
+  <!-- 上传区 -->
+  <div class="upload-section">
+    <div class="upload-card" id="card-in" onclick="document.getElementById('file-in').click()">
+      <div class="icon">📥</div>
+      <div class="label">上传入库文件（Excel）</div>
+      <div class="hint">支持 .xlsx / .xls 格式</div>
+      <div class="filename" id="fname-in"></div>
+      <input type="file" id="file-in" accept=".xlsx,.xls" class="hidden" onchange="handleFile('in', this)">
+    </div>
+    <div class="upload-card" id="card-out" onclick="document.getElementById('file-out').click()">
+      <div class="icon">📤</div>
+      <div class="label">上传出库文件（Excel）</div>
+      <div class="hint">支持 .xlsx / .xls 格式</div>
+      <div class="filename" id="fname-out"></div>
+      <input type="file" id="file-out" accept=".xlsx,.xls" class="hidden" onchange="handleFile('out', this)">
+    </div>
+    <div class="upload-card" id="card-mat" onclick="document.getElementById('file-mat').click()">
+      <div class="icon">🧰</div>
+      <div class="label">物料主数据（可选）</div>
+      <div class="hint">零件图号→每箱件数</div>
+      <div class="filename" id="fname-mat"></div>
+      <input type="file" id="file-mat" accept=".xlsx,.xls" class="hidden" onchange="handleFile('mat', this)">
+    </div>
+  </div>
+
+  <!-- 主布局 -->
+  <div class="layout" id="main-layout" style="display:none;">
+    <!-- 侧边栏 -->
+    <div class="sidebar" id="sidebar">
+      <button class="btn btn-danger btn-sm" style="width:100%;margin-bottom:12px;" onclick="clearAll()">🗑️ 清除并重新开始</button>
+      <div id="sidebar-controls"></div>
+    </div>
+    <!-- 主内容 -->
+    <div class="main-content" id="main-content"></div>
+  </div>
+
+  <!-- 无数据提示 -->
+  <div class="no-data" id="no-data">
+    <div class="icon">👆</div>
+    <h2>请在上方上传数据文件开始分析</h2>
+    <p>支持：上传两个独立文件（入库+出库）｜ 一个文件含两个Sheet ｜ 仅入库或出库单独分析</p>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════
+// 全局状态
+// ═══════════════════════════════════════════
+const state = {
+  wbIn: null, wbOut: null, wbMat: null,
+  sheetIn: '', sheetOut: '', sheetMat: '',
+  dataIn: [], dataOut: [], matMap: {},
+  config: { "业务规则": {
+    "一托盘装多少箱": 36, "收货超过多少箱需用托盘": 12,
+    "货架层数": 3, "库容缓冲系数": 0.25,
+    "收货每人每小时处理箱数": 15, "发货每人每小时处理箱数": 12
+  }}
+};
+
+// ═══════════════════════════════════════════
+// 文件处理
+// ═══════════════════════════════════════════
+function handleFile(type, input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const data = new Uint8Array(e.target.result);
+    const wb = XLSX.read(data, { type: 'array', cellDates: true });
+    if (type === 'in') { state.wbIn = wb; document.getElementById('fname-in').textContent = file.name; document.getElementById('card-in').classList.add('has-file'); }
+    else if (type === 'out') { state.wbOut = wb; document.getElementById('fname-out').textContent = file.name; document.getElementById('card-out').classList.add('has-file'); }
+    else if (type === 'mat') { state.wbMat = wb; document.getElementById('fname-mat').textContent = file.name; document.getElementById('card-mat').classList.add('has-file'); }
+    updateUI();
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function sheetToData(wb, sheetName) {
+  if (!wb || !sheetName) return [];
+  const ws = wb.Sheets[sheetName];
+  if (!ws) return [];
+  return XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+}
+
+function parseSheet(wb, sheetName) {
+  const raw = sheetToData(wb, sheetName);
+  if (raw.length < 2) return { headers: [], rows: [] };
+  // Clean headers (remove BOM, trim)
+  let headers = raw[0].map(h => String(h || '').replace(/^﻿/, '').trim());
+  let rows = raw.slice(1).filter(r => r.some(c => c !== null && c !== ''));
+  return { headers, rows };
+}
+
+// ═══════════════════════════════════════════
+// 列识别
+// ═══════════════════════════════════════════
+function findCol(headers, candidates) {
+  for (let i = 0; i < headers.length; i++) {
+    const h = headers[i].toLowerCase().replace(/\s/g, '');
+    for (const cand of candidates) {
+      if (h.includes(cand.toLowerCase())) return i;
+    }
+  }
+  return -1;
+}
+
+function findTimeCol(headers) {
+  return findCol(headers, ['时间', 'time', '日期', 'date']);
+}
+function findQtyCol(headers) {
+  return findCol(headers, ['箱数', '箱', '数量', 'qty', 'quantity']);
+}
+function findColByName(headers, name) {
+  // Exact match
+  let idx = headers.findIndex(h => h === name);
+  if (idx >= 0) return idx;
+  // Normalized match
+  const norm = name.replace(/\s/g, '');
+  idx = headers.findIndex(h => h.replace(/\s/g, '') === norm);
+  return idx;
+}
+
+// ═══════════════════════════════════════════
+// 数据解析
+// ═══════════════════════════════════════════
+function parseData(headers, rows, type) {
+  let timeIdx, qtyIdx;
+  if (type === 'in') {
+    timeIdx = findTimeCol(headers);
+    qtyIdx = findCol(headers, ['箱数', '箱', '数量', 'qty']);
+  } else {
+    timeIdx = findTimeCol(headers);
+    qtyIdx = findCol(headers, ['箱数', '箱', '数量', 'qty', 'quantity']);
+  }
+  if (timeIdx < 0) timeIdx = 0;
+  if (qtyIdx < 0) qtyIdx = headers.length > 1 ? 1 : 0;
+
+  const result = [];
+  for (const row of rows) {
+    let timeVal = row[timeIdx];
+    let qtyVal = row[qtyIdx];
+    if (!timeVal) continue;
+    let dt;
+    if (timeVal instanceof Date) dt = timeVal;
+    else { dt = new Date(timeVal); if (isNaN(dt)) continue; }
+    let qty = parseFloat(String(qtyVal).replace(/,/g, '').trim()) || 0;
+    result.push({ time: dt, qty, raw: row });
+  }
+  result.sort((a, b) => a.time - b.time);
+  return { data: result, timeIdx, qtyIdx };
+}
+
+// ═══════════════════════════════════════════
+// UI 更新
+// ═══════════════════════════════════════════
+function updateUI() {
+  const hasIn = !!state.wbIn;
+  const hasOut = !!state.wbOut;
+  if (!hasIn && !hasOut) {
+    document.getElementById('main-layout').style.display = 'none';
+    document.getElementById('no-data').style.display = 'block';
+    return;
+  }
+  document.getElementById('main-layout').style.display = 'flex';
+  document.getElementById('no-data').style.display = 'none';
+
+  buildSidebar();
+  loadDataAndRender();
+}
+
+function buildSidebar() {
+  let html = '';
+  // 入库 Sheet 选择
+  if (state.wbIn) {
+    const sheets = state.wbIn.SheetNames;
+    if (!state.sheetIn || !sheets.includes(state.sheetIn)) {
+      state.sheetIn = sheets.find(s => /入库|in/i.test(s)) || sheets[0];
+    }
+    const parsed = parseSheet(state.wbIn, state.sheetIn);
+    html += `<h3>📥 入库</h3>`;
+    html += `<div class="ctrl-group"><label>Sheet</label><select onchange="state.sheetIn=this.value;loadDataAndRender()">${sheets.map(s => `<option ${s===state.sheetIn?'selected':''}>${s}</option>`).join('')}</select></div>`;
+    html += `<div class="ctrl-group"><label>时间列</label><select id="t-in" onchange="loadDataAndRender()">`;
+    html += `<option value="-1">（自动）</option>`;
+    parsed.headers.forEach((h, i) => { html += `<option value="${i}">${h}</option>`; });
+    html += `</select></div>`;
+    html += `<div class="ctrl-group"><label>数量列</label><select id="q-in" onchange="loadDataAndRender()">`;
+    html += `<option value="-1">（自动）</option>`;
+    parsed.headers.forEach((h, i) => { html += `<option value="${i}">${h}</option>`; });
+    html += `</select></div>`;
+  }
+  // 出库 Sheet 选择
+  if (state.wbOut) {
+    const sheets = state.wbOut.SheetNames;
+    if (!state.sheetOut || !sheets.includes(state.sheetOut)) {
+      state.sheetOut = sheets.find(s => /出库|out/i.test(s)) || sheets[0];
+    }
+    const parsed = parseSheet(state.wbOut, state.sheetOut);
+    html += `<h3>📤 出库</h3>`;
+    html += `<div class="ctrl-group"><label>Sheet</label><select onchange="state.sheetOut=this.value;loadDataAndRender()">${sheets.map(s => `<option ${s===state.sheetOut?'selected':''}>${s}</option>`).join('')}</select></div>`;
+    html += `<div class="ctrl-group"><label>时间列</label><select id="t-out" onchange="loadDataAndRender()">`;
+    html += `<option value="-1">（自动）</option>`;
+    parsed.headers.forEach((h, i) => { html += `<option value="${i}">${h}</option>`; });
+    html += `</select></div>`;
+    html += `<div class="ctrl-group"><label>数量列</label><select id="q-out" onchange="loadDataAndRender()">`;
+    html += `<option value="-1">（自动）</option>`;
+    parsed.headers.forEach((h, i) => { html += `<option value="${i}">${h}</option>`; });
+    html += `</select></div>`;
+  }
+  // 物料主数据
+  if (state.wbMat) {
+    const sheets = state.wbMat.SheetNames;
+    if (!state.sheetMat || !sheets.includes(state.sheetMat)) state.sheetMat = sheets[0];
+    html += `<h3>🧰 主数据</h3>`;
+    html += `<div class="ctrl-group"><label>Sheet</label><select onchange="state.sheetMat=this.value;loadDataAndRender()">${sheets.map(s => `<option ${s===state.sheetMat?'selected':''}>${s}</option>`).join('')}</select></div>`;
+  }
+  document.getElementById('sidebar-controls').innerHTML = html;
+}
+
+function loadDataAndRender() {
+  // Parse入库
+  if (state.wbIn && state.sheetIn) {
+    const parsed = parseSheet(state.wbIn, state.sheetIn);
+    const tIn = parseInt(document.getElementById('t-in')?.value || -1);
+    const qIn = parseInt(document.getElementById('q-in')?.value || -1);
+    const headers = parsed.headers;
+    let timeIdx = tIn >= 0 ? tIn : findTimeCol(headers);
+    let qtyIdx = qIn >= 0 ? qIn : findQtyCol(headers);
+    if (timeIdx < 0) timeIdx = 0;
+    if (qtyIdx < 0) qtyIdx = headers.length > 1 ? 1 : 0;
+    state.dataIn = parsed.rows.map(row => {
+      let dt = row[timeIdx] instanceof Date ? row[timeIdx] : new Date(row[timeIdx]);
+      if (isNaN(dt)) return null;
+      let qty = parseFloat(String(row[qtyIdx] || 0).replace(/,/g, '').trim()) || 0;
+      return { time: dt, qty, raw: row };
+    }).filter(Boolean).sort((a, b) => a.time - b.time);
+    // Pallets
+    state.dataIn.forEach(d => {
+      d.pallets = d.qty > 12 ? Math.ceil(d.qty / 36) : 0;
+    });
+  }
+  // Parse出库
+  if (state.wbOut && state.sheetOut) {
+    const parsed = parseSheet(state.wbOut, state.sheetOut);
+    const tOut = parseInt(document.getElementById('t-out')?.value || -1);
+    const qOut = parseInt(document.getElementById('q-out')?.value || -1);
+    const headers = parsed.headers;
+    let timeIdx = tOut >= 0 ? tOut : findTimeCol(headers);
+    let qtyIdx = qOut >= 0 ? qOut : findQtyCol(headers);
+    if (timeIdx < 0) timeIdx = 0;
+    if (qtyIdx < 0) qtyIdx = headers.length > 1 ? 1 : 0;
+    state.dataOut = parsed.rows.map(row => {
+      let dt = row[timeIdx] instanceof Date ? row[timeIdx] : new Date(row[timeIdx]);
+      if (isNaN(dt)) return null;
+      let qty = parseFloat(String(row[qtyIdx] || 0).replace(/,/g, '').trim()) || 0;
+      return { time: dt, qty, raw: row };
+    }).filter(Boolean).sort((a, b) => a.time - b.time);
+  }
+  // Parse物料主数据
+  if (state.wbMat && state.sheetMat) {
+    const parsed = parseSheet(state.wbMat, state.sheetMat);
+    const codeIdx = findCol(parsed.headers, ['图号', '零件', '物料', '编码', 'code', 'sku']);
+    const perBoxIdx = findCol(parsed.headers, ['每箱件数', '箱件数', '件/箱', '件数']);
+    if (codeIdx >= 0 && perBoxIdx >= 0) {
+      state.matMap = {};
+      parsed.rows.forEach(row => {
+        const code = String(row[codeIdx] || '').trim();
+        const perBox = parseFloat(row[perBoxIdx]) || 0;
+        if (code) state.matMap[code] = perBox;
+      });
+    }
+  }
+  renderAll();
+}
+
+// ═══════════════════════════════════════════
+// 渲染
+// ═══════════════════════════════════════════
+function renderAll() {
+  const hasIn = state.dataIn.length > 0;
+  const hasOut = state.dataOut.length > 0;
+  if (!hasIn && !hasOut) {
+    document.getElementById('main-content').innerHTML = '<div class="no-data"><div class="icon">📊</div><h2>无有效数据</h2><p>请检查文件和列设置</p></div>';
+    return;
+  }
+
+  // 时间范围
+  let allTimes = [];
+  if (hasIn) state.dataIn.forEach(d => allTimes.push(d.time));
+  if (hasOut) state.dataOut.forEach(d => allTimes.push(d.time));
+  const minD = new Date(Math.min(...allTimes));
+  const maxD = new Date(Math.max(...allTimes));
+
+  // 过滤
+  let dfIn = hasIn ? [...state.dataIn] : [];
+  let dfOut = hasOut ? [...state.dataOut] : [];
+
+  const totalIn = dfIn.reduce((s, d) => s + d.qty, 0);
+  const totalOut = dfOut.reduce((s, d) => s + d.qty, 0);
+  const totalPallets = dfIn.reduce((s, d) => s + d.pallets, 0);
+  const days = Math.floor((maxD - minD) / 86400000) + 1;
+
+  let html = '';
+
+  // ═══ 概览 ═══
+  html += '<div class="section"><h2>📊 数据概览</h2>';
+  html += '<div class="metrics">';
+  html += metricCard('入库总数量', `${totalIn.toLocaleString()} 箱`);
+  html += metricCard(hasOut ? '出库总数量' : '', hasOut ? `${totalOut.toLocaleString()} 箱` : '-', 'out');
+  html += metricCard('入库笔数', `${dfIn.length.toLocaleString()}`);
+  html += metricCard(hasOut ? '出库笔数' : '', hasOut ? `${dfOut.length.toLocaleString()}` : '-', 'out');
+  html += '</div>';
+
+  if (totalPallets > 0) {
+    html += '<div class="metrics">';
+    html += metricCard('入库托盘总量', `${totalPallets.toLocaleString()} 托`, 'success');
+    html += metricCard('日均托盘量', days > 0 ? `${(totalPallets/days).toFixed(1)} 托` : '-', 'success');
+    const dailyPalletMax = Math.max(...groupByDay(dfIn).map(g => g.pallets));
+    html += metricCard('最大单日托盘', `${dailyPalletMax.toLocaleString()} 托`, 'success');
+    html += '</div>';
+  }
+
+  html += '<div class="metrics">';
+  html += metricCard('分析天数', `${days} 天`);
+  html += metricCard('日均入库', days > 0 ? `${(totalIn/days).toFixed(0)} 箱` : '0');
+  html += metricCard('日均出库', days > 0 && hasOut ? `${(totalOut/days).toFixed(0)} 箱` : '-', 'out');
+  html += '</div>';
+
+  // 单日极值
+  html += '<h3 style="margin-top:16px;">📈 单日极值统计</h3>';
+  if (hasIn) {
+    const dailyIn = groupByDay(dfIn);
+    const peakIn = dailyIn.reduce((a, b) => a.qty > b.qty ? a : b);
+    const nonzeroIn = dailyIn.filter(g => g.qty > 0);
+    const valleyIn = nonzeroIn.length > 0 ? nonzeroIn.reduce((a, b) => a.qty < b.qty ? a : b) : peakIn;
+    html += '<div class="metrics">';
+    html += metricCard('单日入库峰值', `${peakIn.qty.toLocaleString()} 箱`);
+    html += metricCard('峰值日期', fmtDate(peakIn.date));
+    html += metricCard('单日入库谷值', `${valleyIn.qty.toLocaleString()} 箱`, 'warning');
+    html += metricCard('谷值日期', fmtDate(valleyIn.date));
+    html += '</div>';
+  }
+  if (hasOut) {
+    const dailyOut = groupByDay(dfOut);
+    const peakOut = dailyOut.reduce((a, b) => a.qty > b.qty ? a : b);
+    const nonzeroOut = dailyOut.filter(g => g.qty > 0);
+    const valleyOut = nonzeroOut.length > 0 ? nonzeroOut.reduce((a, b) => a.qty < b.qty ? a : b) : peakOut;
+    html += '<div class="metrics">';
+    html += metricCard('单日出库峰值', `${peakOut.qty.toLocaleString()} 箱`, 'out');
+    html += metricCard('峰值日期', fmtDate(peakOut.date), 'out');
+    html += metricCard('单日出库谷值', `${valleyOut.qty.toLocaleString()} 箱`, 'warning');
+    html += metricCard('谷值日期', fmtDate(valleyOut.date), 'warning');
+    html += '</div>';
+  }
+
+  // 每日趋势图
+  html += '<h3 style="margin-top:16px;">每日趋势</h3><div id="chart-daily" style="width:100%;height:400px;"></div>';
+  html += '</div>';
+
+  // ═══ 频次分析 ═══
+  html += '<div class="section"><h2>⏱ 频次分析</h2>';
+  if (hasIn) {
+    html += '<h3>入库</h3><div id="chart-freq-in" style="width:100%;height:350px;"></div>';
+  }
+  if (hasOut) {
+    html += '<h3>出库</h3><div id="chart-freq-out" style="width:100%;height:350px;"></div>';
+  }
+  html += '</div>';
+
+  // ═══ 批次分布 ═══
+  if (hasOut) {
+    const orderIdx = findCol(parseSheet(state.wbOut, state.sheetOut).headers, ['生产订单', '订单', 'order']);
+    const partIdx = findCol(parseSheet(state.wbOut, state.sheetOut).headers, ['图号', '料号', '零件', '物料', 'code', 'sku']);
+    const batchIdx = findCol(parseSheet(state.wbOut, state.sheetOut).headers, ['批次', 'batch', 'lot']);
+    if (orderIdx >= 0 && partIdx >= 0 && batchIdx >= 0) {
+      html += '<div class="section"><h2>🧬 批次分布分析（生产订单 × 料号 → 批次数）</h2>';
+      const batchData = computeBatchDist(dfOut, orderIdx, partIdx, batchIdx);
+      html += '<div class="metrics">';
+      html += metricCard('订单×料号组合数', `${batchData.combos.toLocaleString()}`);
+      html += metricCard('平均批次数量', batchData.avgBatches.toFixed(2));
+      html += metricCard('最多批次', `${batchData.maxBatches}`);
+      html += metricCard('多批次组合占比', `${(batchData.multiPct * 100).toFixed(1)}%`, 'warning');
+      html += '</div>';
+      html += '<div id="chart-batch" style="width:100%;height:350px;margin-top:12px;"></div>';
+      html += '<details class="expander"><summary>批次最多的 Top 15 组合</summary>';
+      html += '<table class="data-table"><thead><tr><th>生产订单</th><th>料号</th><th>批次数量</th><th>出库笔数</th></tr></thead><tbody>';
+      batchData.top15.forEach(r => { html += `<tr><td>${r.order}</td><td>${r.part}</td><td>${r.batches}</td><td>${r.count}</td></tr>`; });
+      html += '</tbody></table></details>';
+      html += '</div>';
+    }
+  }
+
+  // ═══ 在库时间分析 (FIFO) ═══
+  if (hasIn && hasOut) {
+    html += '<div class="section"><h2>🏭 在库时间分析（FIFO）</h2>';
+    const dwell = computeFIFO(dfIn, dfOut);
+    if (dwell.length > 0) {
+      html += '<div class="metrics">';
+      html += metricCard('平均在库', `${dwell.avg.toFixed(1)} 天`);
+      html += metricCard('中位在库', `${dwell.median.toFixed(1)} 天`);
+      html += metricCard('最长在库', `${dwell.max.toFixed(1)} 天`, 'warning');
+      html += '</div>';
+      html += '<div id="chart-dwell" style="width:100%;height:350px;margin-top:12px;"></div>';
+
+      // 规划建议
+      html += '<h3 style="margin-top:20px;">📋 规划建议</h3>';
+      const rule = state.config['业务规则'];
+      if (totalPallets > 0) {
+        const dailyPallet = totalPallets / days;
+        const reqPallet = dailyPallet * dwell.avg;
+        const buffer = reqPallet * rule['库容缓冲系数'];
+        html += `<div class="info-box">🧱 <strong>库容规划（托盘级）</strong><br>• 日均入库：${dailyPallet.toFixed(1)} 托<br>• 平均在库：${dwell.avg.toFixed(1)} 天<br>• 基础储位需求：${reqPallet.toFixed(0)} 托<br>• 建议储位（含${Math.round(rule['库容缓冲系数']*100)}%缓冲）：${(reqPallet+buffer).toFixed(0)} 托<br>• 按 ${rule['货架层数']} 层货架 → 约 ${((reqPallet+buffer)/rule['货架层数']).toFixed(0)} 个托盘位/层</div>`;
+      }
+      // 人员配置
+      const inHours = groupByHour(dfIn);
+      const avgH = inHours.reduce((s, h) => s + h.count, 0) / inHours.length;
+      const maxH = Math.max(...inHours.map(h => h.count));
+      html += `<div class="info-box success">收货区：${Math.max(1, Math.round(avgH/rule['收货每人每小时处理箱数']))} ~ ${Math.max(1, Math.round(maxH/rule['收货每人每小时处理箱数']))} 人（每人每小时处理 ${rule['收货每人每小时处理箱数']} 箱）</div>`;
+      if (hasOut) {
+        const outHours = groupByHour(dfOut);
+        const avgHo = outHours.reduce((s, h) => s + h.count, 0) / outHours.length;
+        const maxHo = Math.max(...outHours.map(h => h.count));
+        html += `<div class="info-box success">发货区：${Math.max(1, Math.round(avgHo/rule['发货每人每小时处理箱数']))} ~ ${Math.max(1, Math.round(maxHo/rule['发货每人每小时处理箱数']))} 人（每人每小时处理 ${rule['发货每人每小时处理箱数']} 箱）</div>`;
+      }
+    }
+    html += '</div>';
+  }
+
+  // ═══ 原始数据 ═══
+  html += '<div class="section"><h2>📋 原始数据</h2>';
+  if (hasIn) {
+    html += '<details class="expander"><summary>入库数据（'+dfIn.length+' 条）</summary>';
+    html += renderTable(dfIn);
+    html += '</details>';
+  }
+  if (hasOut) {
+    html += '<details class="expander"><summary>出库数据（'+dfOut.length+' 条）</summary>';
+    html += renderTable(dfOut);
+    html += '</details>';
+  }
+  html += '</div>';
+
+  document.getElementById('main-content').innerHTML = html;
+
+  // 绘制图表
+  drawDailyChart(dfIn, dfOut);
+  if (hasIn) drawFreqChart('chart-freq-in', dfIn, '入库频次', 'Blues');
+  if (hasOut) drawFreqChart('chart-freq-out', dfOut, '出库频次', 'Reds');
+  if (hasOut) {
+    const orderIdx = findCol(parseSheet(state.wbOut, state.sheetOut).headers, ['生产订单', '订单', 'order']);
+    const partIdx = findCol(parseSheet(state.wbOut, state.sheetOut).headers, ['图号', '料号', '零件', 'code', 'sku']);
+    const batchIdx = findCol(parseSheet(state.wbOut, state.sheetOut).headers, ['批次', 'batch', 'lot']);
+    if (orderIdx >= 0 && partIdx >= 0 && batchIdx >= 0) {
+      drawBatchChart(dfOut, orderIdx, partIdx, batchIdx);
+    }
+  }
+  if (hasIn && hasOut) {
+    const dwell = computeFIFO(dfIn, dfOut);
+    if (dwell.length > 0) drawDwellChart(dwell);
+  }
+}
+
+// ═══════════════════════════════════════════
+// 数据分析函数
+// ═══════════════════════════════════════════
+function groupByDay(data) {
+  const groups = {};
+  data.forEach(d => {
+    const key = d.time.toISOString().slice(0, 10);
+    if (!groups[key]) groups[key] = { date: new Date(key), qty: 0, pallets: 0, count: 0 };
+    groups[key].qty += d.qty;
+    groups[key].pallets += d.pallets || 0;
+    groups[key].count++;
+  });
+  return Object.values(groups).sort((a, b) => a.date - b.date);
+}
+
+function groupByHour(data) {
+  const hours = [];
+  for (let i = 0; i < 24; i++) hours.push({ hour: i, count: 0 });
+  data.forEach(d => { hours[d.time.getHours()].count++; });
+  return hours;
+}
+
+function computeFIFO(dfIn, dfOut) {
+  let inQueue = dfIn.map(d => ({ time: d.time, qty: d.qty }));
+  const dwell = [];
+  let idx = 0;
+  for (const out of dfOut) {
+    let qty = out.qty;
+    while (qty > 0 && idx < inQueue.length) {
+      const r = inQueue[idx];
+      if (r.qty <= 0) { idx++; continue; }
+      const m = Math.min(qty, r.qty);
+      const days = (out.time - r.time) / 86400000;
+      dwell.push({ days, qty: m });
+      r.qty -= m;
+      qty -= m;
+      if (r.qty <= 0) idx++;
+    }
+  }
+  if (dwell.length === 0) return [];
+  // Weighted average
+  const totalWeight = dwell.reduce((s, d) => s + d.qty, 0);
+  const weightedSum = dwell.reduce((s, d) => s + d.days * d.qty, 0);
+  const avg = weightedSum / totalWeight;
+  // Median (expanded)
+  const expanded = [];
+  dwell.forEach(d => { for (let i = 0; i < Math.round(d.qty); i++) expanded.push(d.days); });
+  expanded.sort((a, b) => a - b);
+  const median = expanded.length > 0 ? expanded[Math.floor(expanded.length / 2)] : 0;
+  const max = Math.max(...dwell.map(d => d.days));
+  return { ...dwell, avg, median, max, length: dwell.length };
+}
+
+function computeBatchDist(data, orderIdx, partIdx, batchIdx) {
+  const groups = {};
+  data.forEach(d => {
+    const order = String(d.raw[orderIdx] || '');
+    const part = String(d.raw[partIdx] || '');
+    const batch = String(d.raw[batchIdx] || '');
+    if (!order || !part) return;
+    const key = order + '|' + part;
+    if (!groups[key]) groups[key] = { order, part, batches: new Set(), count: 0 };
+    if (batch) groups[key].batches.add(batch);
+    groups[key].count++;
+  });
+  const arr = Object.values(groups).map(g => ({ order: g.order, part: g.part, batches: g.batches.size, count: g.count }));
+  arr.sort((a, b) => b.batches - a.batches);
+  const totalBatches = arr.reduce((s, g) => s + g.batches, 0);
+  const maxBatches = arr.length > 0 ? arr[0].batches : 0;
+  const multiPct = arr.filter(g => g.batches > 1).length / (arr.length || 1);
+  return {
+    combos: arr.length,
+    avgBatches: arr.length > 0 ? totalBatches / arr.length : 0,
+    maxBatches,
+    multiPct,
+    top15: arr.slice(0, 15)
+  };
+}
+
+// ═══════════════════════════════════════════
+// 图表绘制
+// ═══════════════════════════════════════════
+function drawDailyChart(dfIn, dfOut) {
+  const dailyIn = groupByDay(dfIn);
+  const dailyOut = groupByDay(dfOut);
+  const allDates = [...new Set([...dailyIn.map(d=>fmtDate(d.date)), ...dailyOut.map(d=>fmtDate(d.date))])].sort();
+  const traces = [];
+  if (dfIn.length > 0) {
+    traces.push({
+      x: dailyIn.map(d => fmtDate(d.date)), y: dailyIn.map(d => d.qty),
+      type: 'scatter', mode: 'lines+markers', name: '入库(箱)',
+      line: { color: '#2E86AB', width: 2 }
+    });
+  }
+  if (dfOut.length > 0) {
+    traces.push({
+      x: dailyOut.map(d => fmtDate(d.date)), y: dailyOut.map(d => d.qty),
+      type: 'scatter', mode: 'lines+markers', name: '出库(箱)',
+      line: { color: '#A23B72', width: 2 }
+    });
+  }
+  Plotly.newPlot('chart-daily', traces, {
+    height: 400, hovermode: 'x unified', yaxis: { title: '箱数' },
+    margin: { l: 50, r: 20, t: 20, b: 40 }, legend: { orientation: 'h', y: -0.2 }
+  }, { responsive: true });
+}
+
+function drawFreqChart(divId, data, title, colorscale) {
+  const hours = groupByHour(data);
+  Plotly.newPlot(divId, [{
+    x: hours.map(h => h.hour), y: hours.map(h => h.count),
+    type: 'bar', name: '笔数',
+    marker: { color: hours.map(h => h.count), colorscale: colorscale }
+  }], {
+    title, xaxis: { title: '小时', dtick: 1 }, yaxis: { title: '笔数' },
+    margin: { l: 50, r: 20, t: 40, b: 40 }
+  }, { responsive: true });
+}
+
+function drawBatchChart(data, orderIdx, partIdx, batchIdx) {
+  const bd = computeBatchDist(data, orderIdx, partIdx, batchIdx);
+  const dist = {};
+  bd.top15.forEach(g => { dist[g.batches] = (dist[g.batches] || 0) + 1; });
+  // Actually compute full distribution
+  const allGroups = {};
+  data.forEach(d => {
+    const order = String(d.raw[orderIdx] || '');
+    const part = String(d.raw[partIdx] || '');
+    const batch = String(d.raw[batchIdx] || '');
+    if (!order || !part) return;
+    const key = order + '|' + part;
+    if (!allGroups[key]) allGroups[key] = new Set();
+    if (batch) allGroups[key].add(batch);
+  });
+  const histData = {};
+  Object.values(allGroups).forEach(s => {
+    const n = s.size;
+    histData[n] = (histData[n] || 0) + 1;
+  });
+  const keys = Object.keys(histData).map(Number).sort((a,b)=>a-b);
+  Plotly.newPlot('chart-batch', [{
+    x: keys, y: keys.map(k => histData[k]),
+    type: 'bar', name: '组合数',
+    marker: { color: keys.map(k => histData[k]), colorscale: 'Viridis' }
+  }], {
+    title: '批次数量分布', xaxis: { title: '批次数量', dtick: 1 }, yaxis: { title: '组合数' },
+    margin: { l: 50, r: 20, t: 40, b: 40 }
+  }, { responsive: true });
+}
+
+function drawDwellChart(dwell) {
+  const bins = [];
+  const counts = [];
+  const maxDay = Math.ceil(dwell.max);
+  const binSize = Math.max(1, Math.ceil(maxDay / 30));
+  for (let i = 0; i < maxDay + binSize; i += binSize) {
+    bins.push(i);
+    const c = dwell.filter(d => d.days >= i && d.days < i + binSize).reduce((s, d) => s + d.qty, 0);
+    counts.push(c);
+  }
+  Plotly.newPlot('chart-dwell', [{
+    x: bins, y: counts, type: 'bar',
+    marker: { color: '#2E86AB' },
+    name: '匹配数量'
+  }], {
+    title: '在库时间分布', xaxis: { title: '在库天数' }, yaxis: { title: '匹配数量' },
+    margin: { l: 50, r: 20, t: 40, b: 40 },
+    shapes: [{ type: 'line', x0: dwell.avg, x1: dwell.avg, y0: 0, y1: Math.max(...counts), line: { color: 'red', dash: 'dash' } }]
+  }, { responsive: true });
+}
+
+// ═══════════════════════════════════════════
+// 辅助函数
+// ═══════════════════════════════════════════
+function metricCard(label, value, cls = '') {
+  return `<div class="metric-card ${cls}"><div class="value">${value}</div><div class="label">${label}</div></div>`;
+}
+function fmtDate(d) {
+  if (!d) return '-';
+  const dt = d instanceof Date ? d : new Date(d);
+  return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
+}
+function renderTable(data) {
+  if (data.length === 0) return '<p>无数据</p>';
+  const headers = ['时间', '数量'];
+  if (data[0].pallets !== undefined) headers.push('托盘数');
+  let html = '<div style="overflow-x:auto;"><table class="data-table"><thead><tr>';
+  headers.forEach(h => html += `<th>${h}</th>`);
+  html += '</tr></thead><tbody>';
+  data.slice(0, 500).forEach(d => {
+    html += `<tr><td>${fmtDate(d.time)} ${d.time.toTimeString().slice(0,8)}</td><td>${d.qty.toLocaleString()}</td>`;
+    if (d.pallets !== undefined) html += `<td>${d.pallets}</td>`;
+    html += '</tr>';
+  });
+  html += '</tbody></table></div>';
+  if (data.length > 500) html += `<p style="margin-top:8px;color:#999;">显示前 500 条，共 ${data.length} 条</p>`;
+  return html;
+}
+function clearAll() {
+  state.wbIn = null; state.wbOut = null; state.wbMat = null;
+  state.dataIn = []; state.dataOut = [];
+  ['in','out','mat'].forEach(t => {
+    document.getElementById('file-'+t).value = '';
+    document.getElementById('fname-'+t).textContent = '';
+    document.getElementById('card-'+t).classList.remove('has-file');
+  });
+  updateUI();
+}
+
+// 拖拽支持
+['in','out','mat'].forEach(type => {
+  const card = document.getElementById('card-'+type);
+  card.addEventListener('dragover', e => { e.preventDefault(); card.classList.add('dragover'); });
+  card.addEventListener('dragleave', () => card.classList.remove('dragover'));
+  card.addEventListener('drop', e => {
+    e.preventDefault();
+    card.classList.remove('dragover');
+    const file = e.dataTransfer.files[0];
+    if (file) {
+      const input = document.getElementById('file-'+type);
+      input.files = e.dataTransfer.files;
+      input.dispatchEvent(new Event('change'));
+    }
+  });
+});
+
+// 初始化
+updateUI();
+</script>
+</body>
+</html>

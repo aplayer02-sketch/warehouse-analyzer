@@ -5,6 +5,8 @@ import plotly.graph_objects as go
 import numpy as np
 import json
 import os
+import urllib.request
+import urllib.error
 
 st.set_page_config(page_title="库房数据分析与规划工具", page_icon="📦", layout="wide")
 st.title("📦 库房出入库数据分析与规划工具")
@@ -33,6 +35,12 @@ OUT_EFF = RULE.get("发货每人每小时处理箱数", 12)
 FIELD_MAP_IN = CFG.get("入库", {})
 FIELD_MAP_OUT = CFG.get("出库", {})
 FIELD_MAP_MAT = CFG.get("主数据", {})
+AI_CFG = CFG.get("大模型", {})
+AI_ENABLED = bool(AI_CFG.get("启用", True))
+AI_MODEL = AI_CFG.get("模型", "gpt-4o-mini")
+AI_URL = AI_CFG.get("接口地址", "https://api.openai.com/v1/chat/completions")
+AI_TIMEOUT = int(AI_CFG.get("超时秒数", 30))
+AI_KEY = os.environ.get("OPENAI_API_KEY") or AI_CFG.get("密钥", "")
 
 if "version" not in st.session_state:
     st.session_state.version = 0
@@ -122,12 +130,52 @@ def compute_pallets(箱数):
     return math.ceil(箱数 / PALLET_CAPACITY)
 
 
+def call_llm(prompt, model, url, api_key, timeout):
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "你是供应链仓储数据分析师，请用中文、简洁、分点回答，不编造数据。"},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.3,
+    }
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"HTTP {exc.code} {exc.reason}：{detail}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"网络连接失败：{exc.reason}") from exc
+    return data["choices"][0]["message"]["content"].strip()
+
+
+def build_rule_summary(ctx):
+    lines = [
+        "**规则版解读（未调用大模型或调用失败）**",
+        f"- 分析区间共 {ctx['days']} 天，入库 {ctx['total_in']:,} 箱，出库 {ctx['total_out']:,} 箱。",
+    ]
+    if ctx.get("avg_d") is not None:
+        lines.append(f"- 平均在库约 {ctx['avg_d']:.1f} 天；日均入库约 {ctx['daily_pallet']:.1f} 托。")
+        lines.append(f"- 建议储位约 {ctx['recommend_pallet']:,.0f} 托（含 {int(BUFFER_RATE * 100)}% 缓冲），按 {RACK_LEVELS} 层货架约每层 {ctx['per_level']:,.0f} 个托盘位。")
+    lines.append(f"- 收货区建议 {ctx['in_min']} ~ {ctx['in_max']} 人；发货区建议 {ctx['out_min']} ~ {ctx['out_max']} 人。")
+    lines.append("- 以上为规则计算结果，请结合业务波动进一步校验。")
+    return "\n".join(lines)
+
+
 # ── 物料主数据加载 ──
 mat_df = None
 mat_map = {}
 if fmat is not None:
     mat_sheets = sheet_list(fmat)
-    mat_df = read_any(fmat, mat_sheets[0])
+    mat_sheet = next((s for s in mat_sheets if any(k in s.lower() for k in ["主数据", "master", "物料"])), mat_sheets[0])
+    mat_df = read_any(fmat, mat_sheet)
     if mat_df is not None and not mat_df.empty:
         def mat_find(std_name, candidates):
             return find_col_by_map(mat_df, FIELD_MAP_MAT, std_name, candidates)
@@ -166,12 +214,12 @@ if has_inp:
             df_in["托盘数"] = pd.to_numeric(df_in[pallet_col], errors="coerce").fillna(0)
         else:
             df_in["托盘数"] = df_in["数量"].apply(compute_pallets)
-        if mat_map:
-            part_col = find_col_by_map(df_in, FIELD_MAP_IN, "零件图号", ["图号", "零件", "物料", "code", "sku"])
-            if part_col:
-                df_in["零件图号"] = df_in[part_col].astype(str).str.strip()
-                df_in["每箱件数"] = df_in["零件图号"].map(mat_map)
-                df_in["件数"] = df_in["数量"] * df_in["每箱件数"].fillna(0)
+        part_col = find_col_by_map(df_in, FIELD_MAP_IN, "零件图号", ["图号", "零件", "物料", "code", "sku"])
+        if part_col:
+            df_in["零件图号"] = df_in[part_col].astype(str).str.strip()
+        if mat_map and part_col:
+            df_in["每箱件数"] = df_in["零件图号"].map(mat_map)
+            df_in["件数"] = df_in["数量"] * df_in["每箱件数"].fillna(0)
 else:
     has_in = False
 
@@ -190,12 +238,12 @@ if has_outp:
     has_out = df_out is not None and len(df_out) > 0
     if has_out:
         st.sidebar.info(f"📤 出库时间列：{t_out_used} | 数量列：{q_out_used} | {len(df_out):,} 条")
-    if has_out and mat_map:
-        part_col_o = find_col_by_map(df_out, FIELD_MAP_OUT, "零件图号", ["图号", "零件", "物料", "code", "sku"])
-        if part_col_o:
-            df_out["零件图号"] = df_out[part_col_o].astype(str).str.strip()
-            df_out["每箱件数"] = df_out["零件图号"].map(mat_map)
-            df_out["件数"] = df_out["数量"] * df_out["每箱件数"].fillna(0)
+    part_col_o = find_col_by_map(df_out, FIELD_MAP_OUT, "零件图号", ["图号", "零件", "物料", "code", "sku"])
+    if part_col_o:
+        df_out["零件图号"] = df_out[part_col_o].astype(str).str.strip()
+    if mat_map and part_col_o:
+        df_out["每箱件数"] = df_out["零件图号"].map(mat_map)
+        df_out["件数"] = df_out["数量"] * df_out["每箱件数"].fillna(0)
 else:
     has_out = False
 
@@ -461,24 +509,60 @@ if has_batch_analysis:
 # ═══════════════════════════════════════════
 if has_in and has_out:
     st.subheader("🏭 在库时间分析（FIFO）")
-    iq = df_in[["时间", "数量"]].copy().sort_values("时间")
-    oq = df_out[["时间", "数量"]].copy().sort_values("时间")
     dwell = []
-    idx = 0
-    for _, row in oq.iterrows():
-        qty = row["数量"]
-        ot = row["时间"]
-        while qty > 0 and idx < len(iq):
-            r = iq.iloc[idx]
-            if r["数量"] <= 0:
-                idx += 1
-                continue
-            m = min(qty, r["数量"])
-            dwell.append({"在库天数": (ot - r["时间"]).total_seconds() / 86400, "匹配数量": m})
-            iq.at[iq.index[idx], "数量"] -= m
-            qty -= m
-            if iq.iloc[idx]["数量"] <= 0:
-                idx += 1
+    part_stats = []
+    in_part_col = "零件图号" if "零件图号" in df_in.columns else None
+    out_part_col = "零件图号" if "零件图号" in df_out.columns else None
+    if in_part_col and out_part_col:
+        in_series = df_in[in_part_col].fillna("").astype(str).str.strip()
+        out_series = df_out[out_part_col].fillna("").astype(str).str.strip()
+        parts = sorted(set(in_series[in_series != ""]) | set(out_series[out_series != ""]))
+        st.caption("已按零件图号分别进行先进先出匹配")
+        for part in parts:
+            iq = df_in[in_series == part][["时间", "数量"]].copy().sort_values("时间").reset_index(drop=True)
+            oq = df_out[out_series == part][["时间", "数量"]].copy().sort_values("时间").reset_index(drop=True)
+            idx = 0
+            part_dwell = []
+            for _, row in oq.iterrows():
+                qty = row["数量"]
+                ot = row["时间"]
+                while qty > 0 and idx < len(iq):
+                    r = iq.iloc[idx]
+                    if r["数量"] <= 0:
+                        idx += 1
+                        continue
+                    m = min(qty, r["数量"])
+                    rec = {"零件图号": part, "在库天数": (ot - r["时间"]).total_seconds() / 86400, "匹配数量": m}
+                    dwell.append(rec)
+                    part_dwell.append(rec)
+                    iq.at[idx, "数量"] -= m
+                    qty -= m
+                    if iq.iloc[idx]["数量"] <= 0:
+                        idx += 1
+            if part_dwell:
+                part_stats.append({
+                    "零件图号": part,
+                    "出库箱数": oq["数量"].sum(),
+                    "平均在库天数": np.average([d["在库天数"] for d in part_dwell], weights=[d["匹配数量"] for d in part_dwell])
+                })
+    else:
+        iq = df_in[["时间", "数量"]].copy().sort_values("时间")
+        oq = df_out[["时间", "数量"]].copy().sort_values("时间")
+        idx = 0
+        for _, row in oq.iterrows():
+            qty = row["数量"]
+            ot = row["时间"]
+            while qty > 0 and idx < len(iq):
+                r = iq.iloc[idx]
+                if r["数量"] <= 0:
+                    idx += 1
+                    continue
+                m = min(qty, r["数量"])
+                dwell.append({"在库天数": (ot - r["时间"]).total_seconds() / 86400, "匹配数量": m})
+                iq.at[iq.index[idx], "数量"] -= m
+                qty -= m
+                if iq.iloc[idx]["数量"] <= 0:
+                    idx += 1
     if dwell:
         df_d = pd.DataFrame(dwell)
         avg_d = np.average(df_d["在库天数"], weights=df_d["匹配数量"])
@@ -489,6 +573,11 @@ if has_in and has_out:
         fig = px.histogram(df_d, x="在库天数", y="匹配数量", nbins=30, title="在库时间分布")
         fig.add_vline(x=avg_d, line_dash="dash", line_color="red")
         st.plotly_chart(fig, use_container_width=True)
+        if part_stats:
+            part_df = pd.DataFrame(part_stats)
+            part_df["平均在库天数"] = part_df["平均在库天数"].round(2)
+            st.markdown("#### 各零件在库时间")
+            st.dataframe(part_df, use_container_width=True)
 
     # ── 规划建议 ──
     st.subheader("📋 规划建议")
@@ -511,6 +600,61 @@ if has_in and has_out:
         avg_ho = df_out.groupby("小时").size().mean()
         max_ho = df_out.groupby("小时").size().max()
         st.info(f"发货区：{max(1, round(avg_ho/OUT_EFF))} ~ {max(1, round(max_ho/OUT_EFF))} 人（每人每小时处理 {OUT_EFF} 箱）")
+
+    st.markdown("---")
+    st.subheader("🤖 AI 智能解读")
+    in_min = max(1, round(avg_h / IN_EFF))
+    in_max = max(1, round(max_h / IN_EFF))
+    out_min = max(1, round(avg_ho / OUT_EFF))
+    out_max = max(1, round(max_ho / OUT_EFF))
+    ai_daily_pallet = ai_recommend = ai_per_level = None
+    if dwell and "托盘数" in df_in.columns and total_pallets_in > 0:
+        ai_daily_pallet = total_pallets_in / days if days else 0
+        ai_req_pallet = ai_daily_pallet * avg_d
+        ai_buffer = ai_req_pallet * BUFFER_RATE
+        ai_recommend = ai_req_pallet + ai_buffer
+        ai_per_level = ai_recommend / RACK_LEVELS
+    ctx = {
+        "days": days,
+        "total_in": total_in,
+        "total_out": total_out,
+        "avg_d": avg_d if dwell else None,
+        "daily_pallet": ai_daily_pallet,
+        "recommend_pallet": ai_recommend,
+        "per_level": ai_per_level,
+        "in_min": in_min,
+        "in_max": in_max,
+        "out_min": out_min,
+        "out_max": out_max,
+    }
+    rule_text = build_rule_summary(ctx)
+    if AI_ENABLED and AI_KEY:
+        prompt = (
+            "你是供应链仓储数据分析师。请基于以下已计算好的指标，输出中文分析结论。"
+            "要求：分点、简洁、不编造数据，重点给出仓储规划洞察。\n"
+            f"分析天数：{days} 天；入库总量：{total_in:,} 箱；出库总量：{total_out:,} 箱。\n"
+        )
+        if dwell:
+            prompt += f"平均在库：{avg_d:.1f} 天；日均入库托盘：{ai_daily_pallet:.1f} 托；建议储位：{ai_recommend:,.0f} 托（{RACK_LEVELS} 层货架，每层约 {ai_per_level:,.0f} 个托盘位）。\n"
+        prompt += f"收货区建议 {in_min}~{in_max} 人；发货区建议 {out_min}~{out_max} 人。\n"
+        prompt += "请给出：1) 整体概况；2) 周转效率判断；3) 库容与人员建议；4) 潜在风险或改进方向。"
+        ai_error = ""
+        try:
+            ai_text = call_llm(prompt, AI_MODEL, AI_URL, AI_KEY, AI_TIMEOUT)
+        except Exception as exc:
+            ai_text = None
+            ai_error = str(exc)
+        if ai_text:
+            st.markdown(ai_text)
+            st.caption(f"由大模型生成 · 模型：{AI_MODEL}")
+        else:
+            st.info(rule_text)
+            if ai_error:
+                st.error(f"大模型调用失败：{ai_error}")
+            st.caption("已回退到规则版解读")
+    else:
+        st.info(rule_text)
+        st.caption("未配置大模型密钥，显示规则版解读")
 
 # ── 原始数据 ──
 with st.expander("查看原始数据"):
